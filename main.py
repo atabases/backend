@@ -197,3 +197,58 @@ def get_dashboard_data(study_id: str = None, db: Session = Depends(get_db)):
             ]
         }
     }
+
+@app.get("/api/clinical-data")
+def get_clinical_data(study_id: str = None, db: Session = Depends(get_db)):
+    """
+    Returns clinical data table rows.
+    """
+    # Join Patient, Sample, and count Mutations
+    query = (
+        db.query(
+            models.Patient.patient_id,
+            models.Sample.sample_id,
+            func.count(models.Mutation.id).label("mutation_count"),
+            models.Patient.diagnosis_age,
+            models.Patient.sex,
+            models.Patient.ethnicity,
+            models.Patient.diagnosis,
+            models.Sample.immunohistochemistry,
+            models.Patient.stage,
+            models.Sample.tmb_nonsynonymous
+        )
+        .join(models.Sample, models.Patient.id == models.Sample.patient_id)
+        .outerjoin(models.Mutation, models.Sample.id == models.Mutation.sample_id)
+    )
+
+    if study_id:
+        query = query.filter(models.Patient.study_id == study_id)
+
+    query = query.group_by(
+        models.Patient.patient_id,
+        models.Sample.sample_id,
+        models.Patient.diagnosis_age,
+        models.Patient.sex,
+        models.Patient.ethnicity,
+        models.Patient.diagnosis,
+        models.Sample.immunohistochemistry,
+        models.Patient.stage,
+        models.Sample.tmb_nonsynonymous
+    ).all()
+
+    results = []
+    for row in query:
+        results.append({
+            "patientId": row.patient_id,
+            "sampleId": row.sample_id,
+            "mutationCount": row.mutation_count,
+            "diagnosisAge": row.diagnosis_age,
+            "sex": row.sex,
+            "ethnicityCategory": row.ethnicity,
+            "diagnosis": row.diagnosis,
+            "immunohistochemistry": row.immunohistochemistry,
+            "stage": row.stage,
+            "tmb": row.tmb_nonsynonymous
+        })
+
+    return results
