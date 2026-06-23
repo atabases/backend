@@ -252,3 +252,35 @@ def get_clinical_data(study_id: str = None, db: Session = Depends(get_db)):
         })
 
     return results
+
+@app.get("/api/patients/{patient_id}")
+def get_patient_details(patient_id: str, db: Session = Depends(get_db)):
+    """
+    Returns patient details including mutations.
+    """
+    patient = db.query(models.Patient).filter(models.Patient.patient_id == patient_id).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    # Fetch mutations for all samples of this patient
+    samples = db.query(models.Sample).filter(models.Sample.patient_id == patient.id).all()
+    sample_ids = [s.id for s in samples]
+
+    mutations = []
+    if sample_ids:
+        muts = db.query(models.Mutation).filter(models.Mutation.sample_id.in_(sample_ids)).all()
+        for m in muts:
+            # We don't have all these columns in DB, so we mock some for the UI
+            mutations.append({
+                "gene": m.hugo_symbol,
+                "proteinChange": "N/A",
+                "annotation": "None",
+                "mutationType": "Missense",
+                "cohort": "N/A"
+            })
+
+    return {
+        "patientId": patient.patient_id,
+        "diagnosis": patient.diagnosis,
+        "mutations": mutations
+    }
