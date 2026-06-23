@@ -1,19 +1,19 @@
 import os
-import shutil
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
-import models, schemas, database
+import models, schemas
 from database import engine, get_db
 
-# Create database tables
+# Ensure tables exist
 models.Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Biobank & Genomics API")
+app = FastAPI(title="Biobank Clinical Dashboard API")
 
-# Configure CORS
+# Configure CORS for Frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,101 +24,108 @@ app.add_middleware(
 
 @app.get("/")
 async def root():
-    return {"message": "Welcome to the Biobank & Genomics API"}
+    return {"message": "Biobank Dashboard API Active"}
 
-@app.get("/api/health")
-async def health():
-    return {"status": "healthy"}
+@app.get("/api/dashboard/data")
+def get_dashboard_data(db: Session = Depends(get_db)):
+    """
+    Returns aggregated data for all charts and tables in the dashboard grid.
+    """
+    # 1. Total counts
+    total_patients = db.query(models.Patient).count()
+    total_samples = db.query(models.Sample).count()
 
-# Patient Endpoints
-@app.post("/api/patients", response_model=schemas.Patient)
-def create_patient(patient: schemas.PatientCreate, db: Session = Depends(get_db)):
-    try:
-        db_patient = models.Patient(**patient.model_dump())
-        db.add(db_patient)
-        db.commit()
-        db.refresh(db_patient)
-        return db_patient
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+    # Helper for generic group by distribution
+    def get_distribution(model, column):
+        result = db.query(column, func.count(model.id)).group_by(column).all()
+        # Filter out None/Null strings and label them "NA" or "Unknown"
+        dist = []
+        for row in result:
+            val = row[0]
+            count = row[1]
+            if val is None or str(val).strip() == "":
+                name = "Unknown"
+            else:
+                name = str(val)
+            dist.append({"name": name, "value": count})
+        return dist
 
-@app.get("/api/patients", response_model=List[schemas.Patient])
-def read_patients(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    patients = db.query(models.Patient).offset(skip).limit(limit).all()
-    return patients
+    # --- PIE CHARTS ---
+    cancer_type = get_distribution(models.Sample, models.Sample.cancer_type)
+    cancer_type_detailed = get_distribution(models.Sample, models.Sample.cancer_type_detailed)
+    diagnosis = get_distribution(models.Patient, models.Patient.diagnosis)
+    ethnicity = get_distribution(models.Patient, models.Patient.ethnicity)
+    ihc = get_distribution(models.Sample, models.Sample.immunohistochemistry)
+    oncotree = get_distribution(models.Sample, models.Sample.oncotree_code)
+    sex = get_distribution(models.Patient, models.Patient.sex)
+    somatic_status = get_distribution(models.Sample, models.Sample.somatic_status)
+    stage = get_distribution(models.Patient, models.Patient.stage)
 
-# Sample Endpoints
-@app.post("/api/samples", response_model=schemas.Sample)
-def create_sample(sample: schemas.SampleCreate, db: Session = Depends(get_db)):
-    db_sample = models.Sample(**sample.model_dump())
-    db.add(db_sample)
-    db.commit()
-    db.refresh(db_sample)
-    return db_sample
+    # Number of samples per patient
+    samples_per_patient = db.query(models.Sample.patient_id, func.count(models.Sample.id)).group_by(models.Sample.patient_id).all()
+    samples_per_patient_dist = {}
+    for row in samples_per_patient:
+        cnt = str(row[1])
+        samples_per_patient_dist[cnt] = samples_per_patient_dist.get(cnt, 0) + 1
+    samples_per_patient_chart = [{"name": k, "value": v} for k, v in samples_per_patient_dist.items()]
 
-@app.get("/api/samples", response_model=List[schemas.Sample])
-def read_samples(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    samples = db.query(models.Sample).offset(skip).limit(limit).all()
-    return samples
-
-# Genomic File Upload
-@app.post("/api/upload", response_model=schemas.Sample)
-async def upload_file(
-    patient_id: int = Form(...),
-    sample_id: str = Form(...),
-    sample_type: str = Form(...),
-    storage_location: str = Form(...),
-    file: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
-    # 1. Validate File Extension
-    allowed_extensions = {".vcf", ".fasta", ".fastq"}
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid file type. Allowed: {allowed_extensions}"
-        )
-
-    # 2. Ensure Patient Exists
-    db_patient = db.query(models.Patient).filter(models.Patient.id == patient_id).first()
-    if not db_patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
-    # 3. Create Directory Path
-    upload_dir = f"/data/{db_patient.patient_id}"
-    os.makedirs(upload_dir, exist_ok=True)
+    # --- BAR CHARTS (Raw data arrays for frontend binning) ---
+    ages = [a[0] for a in db.query(models.Patient.diagnosis_age).filter(models.Patient.diagnosis_age != None).all()]
+    tmbs = [t[0] for t in db.query(models.Sample.tmb_nonsynonymous).filter(models.Sample.tmb_nonsynonymous != None).all()]
     
-    file_path = os.path.join(upload_dir, file.filename)
+    muts_per_sample = db.query(models.Mutation.sample_id, func.count(models.Mutation.id)).group_by(models.Mutation.sample_id).all()
+    mutation_counts = [m[1] for m in muts_per_sample]
 
-    # 4. Save File in Chunks (for large files)
-    try:
-        with open(file_path, "wb") as buffer:
-            while True:
-                chunk = await file.read(1024 * 1024)  # 1MB chunks
-                if not chunk:
-                    break
-                buffer.write(chunk)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"File save failed: {str(e)}")
+    # --- TABLES ---
+    # Top 50 Mutated Genes
+    mutated_genes = db.query(models.Mutation.hugo_symbol, func.count(models.Mutation.id)).group_by(models.Mutation.hugo_symbol).order_by(func.count(models.Mutation.id).desc()).limit(50).all()
+    
+    # Calculate freq = (mutated samples / total samples) * 100
+    # Wait, the query above counts total mutations across ALL samples. For "freq" in the screenshot,
+    # we usually want % of profiled samples that have this mutation.
+    # We will just pass the raw mutation count for now, and approximate freq in frontend or here.
+    mutated_genes_table = []
+    for m in mutated_genes:
+        # Number of unique samples that have this mutation
+        unique_samples = db.query(func.count(func.distinct(models.Mutation.sample_id))).filter(models.Mutation.hugo_symbol == m[0]).scalar()
+        freq = round((unique_samples / total_samples) * 100, 1) if total_samples > 0 else 0
+        mutated_genes_table.append({
+            "gene": m[0], 
+            "count": m[1],
+            "freq": freq
+        })
 
-    # 5. Update Database
-    try:
-        db_sample = models.Sample(
-            sample_id=sample_id,
-            sample_type=sample_type,
-            storage_location=storage_location,
-            file_path=file_path,
-            patient_id=patient_id
-        )
-        db.add(db_sample)
-        db.commit()
-        db.refresh(db_sample)
-        return db_sample
-    except Exception as e:
-        db.rollback()
-        # Cleanup file if DB update fails
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+    return {
+        "summary": {
+            "patients": total_patients,
+            "samples": total_samples
+        },
+        "pie": {
+            "cancer_studies": [{"name": "paac_jhu_2014", "value": total_samples}],
+            "cancer_type": cancer_type,
+            "cancer_type_detailed": cancer_type_detailed,
+            "diagnosis": diagnosis,
+            "ethnicity": ethnicity,
+            "immunohistochemistry": ihc,
+            "number_of_samples_per_patient": samples_per_patient_chart,
+            "oncotree_code": oncotree,
+            "sex": sex,
+            "somatic_status": somatic_status,
+            "stage": stage
+        },
+        "bar": {
+            "diagnosis_age": ages,
+            "tmb_nonsynonymous": tmbs,
+            "mutation_count": mutation_counts
+        },
+        "tables": {
+            "mutated_genes": mutated_genes_table,
+            "data_types": [
+                {"name": "Mutations", "count": total_samples, "freq": 100.0}
+            ],
+            "case_lists": [
+                {"name": "All samples", "count": total_samples, "freq": 100.0},
+                {"name": "Samples with mutation data", "count": len(muts_per_sample), "freq": round((len(muts_per_sample)/total_samples)*100, 1) if total_samples > 0 else 0}
+            ]
+        }
+    }
