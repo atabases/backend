@@ -275,11 +275,32 @@ def get_patient_details(patient_id: str, db: Session = Depends(get_db)):
                 "proteinChange": m.protein_change if m.protein_change else "N/A",
                 "annotation": m.annotation if m.annotation else "None",
                 "mutationType": m.mutation_type if m.mutation_type else "Missense",
-                "cohort": "N/A"
+                "cohort": "N/A",
+                "sample_id": m.sample_id
+            })
+
+    sample_data = []
+    if samples:
+        for s in samples:
+            sample_muts = [m for m in mutations if m["sample_id"] == s.id]
+            sample_data.append({
+                "sampleId": s.sample_id,
+                "mutationCount": len(sample_muts),
+                "cancerType": s.cancer_type,
+                "cancerTypeDetailed": s.cancer_type_detailed,
+                "immunohistochemistry": s.immunohistochemistry,
+                "oncotreeCode": s.oncotree_code,
+                "somaticStatus": s.somatic_status,
+                "tmb": s.tmb_nonsynonymous
             })
 
     return {
         "patientId": patient.patient_id,
         "diagnosis": patient.diagnosis,
+        "diagnosisAge": patient.diagnosis_age,
+        "ethnicityCategory": patient.ethnicity,
+        "sex": patient.sex,
+        "stage": patient.stage,
+        "samples": sample_data,
         "mutations": mutations
     }
