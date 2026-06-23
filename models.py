@@ -7,7 +7,8 @@ class Patient(Base):
     __tablename__ = "patients"
 
     id = Column(Integer, primary_key=True, index=True)
-    patient_id = Column(String, unique=True, index=True)
+    study_id = Column(String, index=True)
+    patient_id = Column(String, index=True)
     diagnosis = Column(String)
     stage = Column(String)
     diagnosis_age = Column(Float)
@@ -21,7 +22,8 @@ class Sample(Base):
     __tablename__ = "samples"
 
     id = Column(Integer, primary_key=True, index=True)
-    sample_id = Column(String, unique=True, index=True)
+    study_id = Column(String, index=True)
+    sample_id = Column(String, index=True)
     immunohistochemistry = Column(String)
     oncotree_code = Column(String)
     cancer_type = Column(String)
