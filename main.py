@@ -270,12 +270,11 @@ def get_patient_details(patient_id: str, db: Session = Depends(get_db)):
     if sample_ids:
         muts = db.query(models.Mutation).filter(models.Mutation.sample_id.in_(sample_ids)).all()
         for m in muts:
-            # We don't have all these columns in DB, so we mock some for the UI
             mutations.append({
                 "gene": m.hugo_symbol,
-                "proteinChange": "N/A",
-                "annotation": "None",
-                "mutationType": "Missense",
+                "proteinChange": m.protein_change if m.protein_change else "N/A",
+                "annotation": m.annotation if m.annotation else "None",
+                "mutationType": m.mutation_type if m.mutation_type else "Missense",
                 "cohort": "N/A"
             })
 

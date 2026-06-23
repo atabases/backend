@@ -41,6 +41,9 @@ class Mutation(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     hugo_symbol = Column(String, index=True)
+    protein_change = Column(String)
+    annotation = Column(String)
+    mutation_type = Column(String)
     sample_id = Column(Integer, ForeignKey("samples.id"))
     
     sample = relationship("Sample", back_populates="mutations")
