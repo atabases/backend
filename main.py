@@ -27,17 +27,26 @@ async def root():
     return {"message": "Biobank Dashboard API Active"}
 
 @app.get("/api/dashboard/data")
-def get_dashboard_data(db: Session = Depends(get_db)):
+def get_dashboard_data(study_id: str = None, db: Session = Depends(get_db)):
     """
     Returns aggregated data for all charts and tables in the dashboard grid.
     """
-    # 1. Total counts
-    total_patients = db.query(models.Patient).count()
-    total_samples = db.query(models.Sample).count()
+    # 1. Base queries for patients and samples
+    patient_query = db.query(models.Patient)
+    sample_query = db.query(models.Sample)
+    if study_id:
+        patient_query = patient_query.filter(models.Patient.study_id == study_id)
+        sample_query = sample_query.filter(models.Sample.study_id == study_id)
+
+    total_patients = patient_query.count()
+    total_samples = sample_query.count()
 
     # Helper for generic group by distribution
     def get_distribution(model, column):
-        result = db.query(column, func.count(model.id)).group_by(column).all()
+        query = db.query(column, func.count(model.id))
+        if study_id:
+            query = query.filter(model.study_id == study_id)
+        result = query.group_by(column).all()
         # Filter out None/Null strings and label them "NA" or "Unknown"
         dist = []
         for row in result:
@@ -62,7 +71,11 @@ def get_dashboard_data(db: Session = Depends(get_db)):
     stage = get_distribution(models.Patient, models.Patient.stage)
 
     # Number of samples per patient
-    samples_per_patient = db.query(models.Sample.patient_id, func.count(models.Sample.id)).group_by(models.Sample.patient_id).all()
+    samples_per_patient_query = db.query(models.Sample.patient_id, func.count(models.Sample.id))
+    if study_id:
+        samples_per_patient_query = samples_per_patient_query.filter(models.Sample.study_id == study_id)
+    samples_per_patient = samples_per_patient_query.group_by(models.Sample.patient_id).all()
+    
     samples_per_patient_dist = {}
     for row in samples_per_patient:
         cnt = str(row[1])
@@ -70,24 +83,35 @@ def get_dashboard_data(db: Session = Depends(get_db)):
     samples_per_patient_chart = [{"name": k, "value": v} for k, v in samples_per_patient_dist.items()]
 
     # --- BAR CHARTS (Raw data arrays for frontend binning) ---
-    ages = [a[0] for a in db.query(models.Patient.diagnosis_age).filter(models.Patient.diagnosis_age != None).all()]
-    tmbs = [t[0] for t in db.query(models.Sample.tmb_nonsynonymous).filter(models.Sample.tmb_nonsynonymous != None).all()]
+    age_query = db.query(models.Patient.diagnosis_age).filter(models.Patient.diagnosis_age != None)
+    tmb_query = db.query(models.Sample.tmb_nonsynonymous).filter(models.Sample.tmb_nonsynonymous != None)
+    if study_id:
+        age_query = age_query.filter(models.Patient.study_id == study_id)
+        tmb_query = tmb_query.filter(models.Sample.study_id == study_id)
+    ages = [a[0] for a in age_query.all()]
+    tmbs = [t[0] for t in tmb_query.all()]
     
-    muts_per_sample = db.query(models.Mutation.sample_id, func.count(models.Mutation.id)).group_by(models.Mutation.sample_id).all()
+    muts_per_sample_query = db.query(models.Mutation.sample_id, func.count(models.Mutation.id)).join(models.Sample)
+    if study_id:
+        muts_per_sample_query = muts_per_sample_query.filter(models.Sample.study_id == study_id)
+    muts_per_sample = muts_per_sample_query.group_by(models.Mutation.sample_id).all()
     mutation_counts = [m[1] for m in muts_per_sample]
 
     # --- TABLES ---
     # Top 50 Mutated Genes
-    mutated_genes = db.query(models.Mutation.hugo_symbol, func.count(models.Mutation.id)).group_by(models.Mutation.hugo_symbol).order_by(func.count(models.Mutation.id).desc()).limit(50).all()
+    mutated_genes_query = db.query(models.Mutation.hugo_symbol, func.count(models.Mutation.id)).join(models.Sample)
+    if study_id:
+        mutated_genes_query = mutated_genes_query.filter(models.Sample.study_id == study_id)
+    mutated_genes = mutated_genes_query.group_by(models.Mutation.hugo_symbol).order_by(func.count(models.Mutation.id).desc()).limit(50).all()
     
-    # Calculate freq = (mutated samples / total samples) * 100
-    # Wait, the query above counts total mutations across ALL samples. For "freq" in the screenshot,
-    # we usually want % of profiled samples that have this mutation.
-    # We will just pass the raw mutation count for now, and approximate freq in frontend or here.
     mutated_genes_table = []
     for m in mutated_genes:
         # Number of unique samples that have this mutation
-        unique_samples = db.query(func.count(func.distinct(models.Mutation.sample_id))).filter(models.Mutation.hugo_symbol == m[0]).scalar()
+        unique_samples_query = db.query(func.count(func.distinct(models.Mutation.sample_id))).join(models.Sample)
+        unique_samples_query = unique_samples_query.filter(models.Mutation.hugo_symbol == m[0])
+        if study_id:
+            unique_samples_query = unique_samples_query.filter(models.Sample.study_id == study_id)
+        unique_samples = unique_samples_query.scalar()
         freq = round((unique_samples / total_samples) * 100, 1) if total_samples > 0 else 0
         mutated_genes_table.append({
             "gene": m[0], 
@@ -95,13 +119,20 @@ def get_dashboard_data(db: Session = Depends(get_db)):
             "freq": freq
         })
 
+    # Prepare cancer studies list
+    if study_id:
+        cancer_studies = [{"name": study_id, "value": total_samples}]
+    else:
+        study_dist = db.query(models.Sample.study_id, func.count(models.Sample.id)).group_by(models.Sample.study_id).all()
+        cancer_studies = [{"name": s[0] if s[0] else "Unknown", "value": s[1]} for s in study_dist]
+
     return {
         "summary": {
             "patients": total_patients,
             "samples": total_samples
         },
         "pie": {
-            "cancer_studies": [{"name": "paac_jhu_2014", "value": total_samples}],
+            "cancer_studies": cancer_studies,
             "cancer_type": cancer_type,
             "cancer_type_detailed": cancer_type_detailed,
             "diagnosis": diagnosis,
