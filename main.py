@@ -390,7 +390,21 @@ async def upload_study(
                     row = dict(zip(headers, cols))
                     sid = get_field(row, ['SAMPLE_ID'])
                     pid = get_field(row, ['PATIENT_ID'])
-                    if not sid or not pid or pid not in patients_map: continue
+                    if not sid or not pid: continue
+                    
+                    if pid not in patients_map:
+                        # Auto-create dummy patient
+                        new_patient = models.Patient(
+                            study_id=study_id,
+                            patient_id=pid,
+                            diagnosis='Unknown',
+                            stage='Unknown'
+                        )
+                        db.add(new_patient)
+                        db.commit()
+                        db.refresh(new_patient)
+                        patients_map[pid] = new_patient.id
+                        
                     samples_to_add.append(models.Sample(
                         study_id=study_id,
                         sample_id=sid,
@@ -436,8 +450,10 @@ async def upload_study(
                     pass
             
             if mutations_to_add:
-                db.bulk_save_objects(mutations_to_add)
-                db.commit()
+                batch_size = 5000
+                for i in range(0, len(mutations_to_add), batch_size):
+                    db.bulk_save_objects(mutations_to_add[i:i+batch_size])
+                    db.commit()
 
         return {"status": "success", "message": "Study uploaded successfully"}
     except Exception as e:
@@ -564,7 +580,21 @@ async def upload_study(
                     row = dict(zip(headers, cols))
                     sid = get_field(row, ['SAMPLE_ID'])
                     pid = get_field(row, ['PATIENT_ID'])
-                    if not sid or not pid or pid not in patients_map: continue
+                    if not sid or not pid: continue
+                    
+                    if pid not in patients_map:
+                        # Auto-create dummy patient
+                        new_patient = models.Patient(
+                            study_id=study_id,
+                            patient_id=pid,
+                            diagnosis='Unknown',
+                            stage='Unknown'
+                        )
+                        db.add(new_patient)
+                        db.commit()
+                        db.refresh(new_patient)
+                        patients_map[pid] = new_patient.id
+                        
                     samples_to_add.append(models.Sample(
                         study_id=study_id,
                         sample_id=sid,
@@ -610,8 +640,10 @@ async def upload_study(
                     pass
             
             if mutations_to_add:
-                db.bulk_save_objects(mutations_to_add)
-                db.commit()
+                batch_size = 5000
+                for i in range(0, len(mutations_to_add), batch_size):
+                    db.bulk_save_objects(mutations_to_add[i:i+batch_size])
+                    db.commit()
 
         return {"status": "success", "message": "Study uploaded successfully"}
     except Exception as e:
