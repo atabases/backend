@@ -4,9 +4,12 @@ from typing import List, Optional
 
 class SampleBase(BaseModel):
     sample_id: str
-    sample_type: str
-    storage_location: str
-    file_path: Optional[str] = None
+    immunohistochemistry: Optional[str] = None
+    oncotree_code: Optional[str] = None
+    cancer_type: Optional[str] = None
+    cancer_type_detailed: Optional[str] = None
+    somatic_status: Optional[str] = None
+    tmb_nonsynonymous: Optional[float] = None
 
 class SampleCreate(SampleBase):
     patient_id: int
@@ -21,8 +24,11 @@ class Sample(SampleBase):
 
 class PatientBase(BaseModel):
     patient_id: str
-    first_name: str
-    last_name: str
+    diagnosis: Optional[str] = None
+    stage: Optional[str] = None
+    diagnosis_age: Optional[float] = None
+    sex: Optional[str] = None
+    ethnicity: Optional[str] = None
 
 class PatientCreate(PatientBase):
     pass
